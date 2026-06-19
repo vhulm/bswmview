@@ -2,9 +2,9 @@
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { useBswMStore } from '@/stores/bswm-store'
 import { useVueFlow } from '@vue-flow/core'
-import type { NodeLayer } from '@/types/bswm'
-import { LAYER_LABEL } from '@/types/bswm'
-import type { BswMNodeData } from '@/graph/graph-builder'
+import type { NodeLayer } from '@/constants/layers'
+import { LAYER_LABEL } from '@/constants/layers'
+import type { BswMNodeData } from '@/types/graph'
 
 const store = useBswMStore()
 const { fitView, zoomIn, zoomOut } = useVueFlow()

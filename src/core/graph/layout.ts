@@ -4,21 +4,12 @@
 
 import ELK from 'elkjs/lib/elk.bundled.js'
 import type { Node, Edge } from '@vue-flow/core'
-import type { NodeLayer } from '@/types/bswm'
-import { LAYER_PARTITION } from '@/types/bswm'
-import type { BswMNodeData } from './graph-builder'
+import type { NodeLayer } from '@/constants/layers'
+import { LAYER_PARTITION } from '@/constants/layers'
+import type { BswMNodeData } from '@/types/graph'
+import { NODE_SIZES } from '@/constants/graph-styles'
 
 const elk = new ELK()
-
-/** 各层节点默认尺寸 */
-const NODE_SIZES: Record<NodeLayer, { width: number; height: number }> = {
-  requestPort: { width: 200, height: 50 },
-  condition:   { width: 220, height: 50 },
-  expression:  { width: 200, height: 50 },
-  rule:        { width: 180, height: 60 },
-  actionList:  { width: 220, height: 50 },
-  action:      { width: 220, height: 50 },
-}
 
 /**
  * 使用 ELK layered 算法布局

@@ -9,26 +9,10 @@
 // ============================================================
 
 import type { Node, Edge } from '@vue-flow/core'
-import type { BswMModel, NodeLayer } from '@/types/bswm'
-
-/** 节点数据类型 */
-export interface BswMNodeData extends Record<string, unknown> {
-  label: string
-  layer: NodeLayer
-  path: string
-  detail: string
-  /** 是否被规则高亮标记 */
-  highlighted?: boolean
-  [key: string]: unknown
-}
-
-// ---- 边颜色定义 ----
-/** 普通引用边: 深灰蓝 */
-const EDGE_DEFAULT_STYLE = { stroke: '#546e7a', strokeWidth: '2' } as const
-/** True 分支边: 深绿 */
-const EDGE_TRUE_STYLE = { stroke: '#2e7d32', strokeWidth: '2.5' } as const
-/** False 分支边: 深红 */
-const EDGE_FALSE_STYLE = { stroke: '#c62828', strokeWidth: '2.5', strokeDasharray: '6 3' } as const
+import type { BswMModel } from '@/types/bswm'
+import type { NodeLayer } from '@/constants/layers'
+import type { BswMNodeData } from '@/types/graph'
+import { EDGE_DEFAULT_STYLE, EDGE_TRUE_STYLE, EDGE_FALSE_STYLE } from '@/constants/graph-styles'
 
 /**
  * 将 BswMModel 转换为 Vue Flow 节点和边

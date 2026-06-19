@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { Handle, Position } from '@vue-flow/core'
+import type { BaseNodeProps } from './BaseNodeProps'
 
-defineProps<{
-  data: { label: string; detail: string; highlighted?: boolean; dimmed?: boolean; unused?: boolean }
-}>()
+defineProps<{ data: BaseNodeProps }>()
 </script>
 
 <template>

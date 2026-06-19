@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useBswMStore } from '@/stores/bswm-store'
-import { LAYER_COLORS } from '@/types/bswm'
-import type { NodeLayer, ModeRequestPort, ModeCondition, LogicalExpression, BswMRule, ActionList, BswMAction, ModeInitValue } from '@/types/bswm'
+import { LAYER_COLORS } from '@/constants/layers'
+import type { NodeLayer } from '@/constants/layers'
+import type { ModeRequestPort, ModeCondition, LogicalExpression, BswMRule, ActionList, BswMAction, ModeInitValue } from '@/types/bswm'
 
 const store = useBswMStore()
 

@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
+import type { BaseNodeProps } from './BaseNodeProps'
 
-const props = defineProps<{
-  data: { label: string; detail: string; highlighted?: boolean; dimmed?: boolean; unused?: boolean }
-}>()
+const props = defineProps<{ data: BaseNodeProps }>()
 
 const opSymbol = computed(() => {
   switch (props.data.detail) {

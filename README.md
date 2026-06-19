@@ -7,6 +7,9 @@
 ![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss)
 
+<!-- 构建状态 badge — 请将 {owner}/{repo} 替换为实际 GitHub 仓库路径 -->
+<!-- ![Build](https://github.com/{owner}/{repo}/actions/workflows/build.yml/badge.svg) -->
+
 ## 功能特性
 
 - **ARXML 解析** — 支持 AUTOSAR BswM 标准配置格式，自动识别 ECU 前缀，兼容 BswMPartition 容器结构
@@ -62,36 +65,55 @@ npm run dev
 ```
 bswmview/
 ├── public/
-│   ├── BswM.arxml          # 示例 ARXML 配置文件
-│   └── favicon.svg         # 网站图标
+│   ├── sample/
+│   │   └── BswM.arxml       # 示例 ARXML 配置文件
+│   └── favicon.svg          # 网站图标
 ├── src/
-│   ├── main.ts             # 应用入口
-│   ├── App.vue             # 根组件
+│   ├── main.ts              # 应用入口
+│   ├── App.vue              # 根组件
+│   ├── core/                # 纯业务逻辑（零 Vue 依赖）
+│   │   ├── index.ts         # 桶导出
+│   │   ├── parser/
+│   │   │   └── arxml-parser.ts  # ARXML 解析器
+│   │   └── graph/
+│   │       ├── graph-builder.ts # 数据模型 → Vue Flow 节点/边
+│   │       ├── chain-tracer.ts  # 链路追踪与未使用节点检测
+│   │       └── layout.ts        # ELK.js 自动布局
 │   ├── types/
-│   │   └── bswm.ts         # BswM 数据模型类型定义
-│   ├── parser/
-│   │   └── arxml-parser.ts # ARXML 解析器
-│   ├── graph/
-│   │   ├── graph-builder.ts # 数据模型 → Vue Flow 节点/边
-│   │   ├── layout.ts        # ELK.js 自动布局
+│   │   ├── bswm.ts          # BswM 领域类型定义
+│   │   └── graph.ts         # 图桥接类型（BswMNodeData, AdjacencyLists）
+│   ├── constants/
+│   │   ├── layers.ts        # 图层分区、颜色、标签
+│   │   └── graph-styles.ts  # 边颜色样式、节点尺寸
+│   ├── composables/
+│   │   └── usePlatform.ts   # Tauri 平台检测组合式函数
+│   ├── utils/
+│   │   └── platform.ts      # 平台工具（Tauri 检测、文件操作）
+│   ├── components/
+│   │   ├── BswMGraph.vue    # 主图组件（侧栏+画布+详情）
+│   │   ├── Sidebar.vue      # 侧栏（文件加载/规则列表）
+│   │   ├── DetailPanel.vue  # 节点详情面板
+│   │   ├── Toolbar.vue      # 工具栏（缩放/布局/搜索）
 │   │   └── nodes/           # 6 种自定义节点组件
+│   │       ├── BaseNodeProps.ts  # 共享 props 类型
 │   │       ├── RequestPortNode.vue
 │   │       ├── ConditionNode.vue
 │   │       ├── ExpressionNode.vue
 │   │       ├── RuleNode.vue
 │   │       ├── ActionListNode.vue
 │   │       └── ActionNode.vue
-│   ├── components/
-│   │   ├── BswMGraph.vue   # 主图组件（侧栏+画布+详情）
-│   │   ├── Sidebar.vue     # 侧栏（文件加载/规则列表）
-│   │   ├── DetailPanel.vue # 节点详情面板
-│   │   └── Toolbar.vue     # 工具栏（缩放/布局/搜索）
 │   ├── stores/
-│   │   └── bswm-store.ts   # Pinia 状态管理
+│   │   └── bswm-store.ts    # Pinia 状态管理
 │   └── styles/
-│       └── global.css      # 全局样式
+│       └── global.css       # 全局样式
+├── tauri/                   # Tauri 桌面打包（仅 Windows exe）
+│   ├── src/
+│   │   ├── commands.rs      # 原生文件对话框（Vue 无法原生实现）
+│   │   ├── lib.rs           # App Builder 配置
+│   │   └── main.rs          # 入口
+│   └── tauri.conf.json      # Tauri 配置
 ├── docs/
-│   └── 架构设计.md          # 架构设计文档
+│   └── architecture.md      # 架构设计文档
 ├── package.json
 ├── vite.config.ts
 └── tsconfig.json
@@ -112,23 +134,23 @@ npm run preview   # 预览生产构建
 当需要支持新的 BswM Action 类型时（如从新 ARXML 中发现的类型），需修改三个文件：
 
 1. **`src/types/bswm.ts`** — 在 `ActionType` 联合类型中添加新类型
-2. **`src/parser/arxml-parser.ts`** — 在 `parseAction` 的 if-else 链中添加新分支，提取该 Action 的参数和引用
-3. **`src/graph/graph-builder.ts`** — 在 `getActionDetailStr` 的 switch 中添加显示逻辑
+2. **`src/core/parser/arxml-parser.ts`** — 在 `parseAction` 的 if-else 链中添加新分支，提取该 Action 的参数和引用
+3. **`src/core/graph/graph-builder.ts`** — 在 `getActionDetailStr` 的 switch 中添加显示逻辑
 
 未识别的 Action 类型会自动走 fallback：保留 `DEFINITION-REF` 最后一段作为类型名，参数不丢失。
 
 ### 添加新的请求端口来源类型
 
 1. **`src/types/bswm.ts`** — 在 `RequestSourceType` 中添加新类型
-2. **`src/parser/arxml-parser.ts`** — 在 `parseRequestPort` 的 if-else 链中添加新分支
+2. **`src/core/parser/arxml-parser.ts`** — 在 `parseRequestPort` 的 if-else 链中添加新分支
 
 ### 修改节点样式
 
-每种节点的颜色在 `src/types/bswm.ts` 的 `LAYER_COLORS` 中定义。节点组件在 `src/graph/nodes/` 目录下，每个组件独立控制自身布局和样式。
+每种节点的颜色在 `src/constants/layers.ts` 的 `LAYER_COLORS` 中定义。节点组件在 `src/components/nodes/` 目录下，每个组件独立控制自身布局和样式。
 
 ### 修改图布局参数
 
-图布局参数在 `src/graph/layout.ts` 的 `applyElkLayout` 函数中定义，包括层间距、节点间距、边路由策略等。
+图布局参数在 `src/core/graph/layout.ts` 的 `applyElkLayout` 函数中定义，包括层间距、节点间距、边路由策略等。
 
 ## 依赖更新
 

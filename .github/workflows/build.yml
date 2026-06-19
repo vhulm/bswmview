@@ -1,0 +1,48 @@
+name: Build Tauri App
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Rust 编译缓存 — 缓存整个 target/ 目录
+      # Cargo.lock 不变时直接命中，仅需重编译自身 crate（~30s vs 首次 ~3min）
+      - name: Cache Cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            tauri/target/
+          key: windows-cargo-${{ hashFiles('tauri/Cargo.lock') }}
+          restore-keys: |
+            windows-cargo-
+
+      # npm ci 要求 package-lock.json 已提交到仓库且与 package.json 同步
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Upload Windows exe
+        uses: actions/upload-artifact@v7
+        with:
+          name: BswMViewer-win-${{ github.ref_name }}
+          path: tauri/target/release/BswMView.exe
+          if-no-files-found: error

@@ -14,14 +14,7 @@
 // ============================================================
 
 import type { BswMModel } from '@/types/bswm'
-
-/** 正向 + 反向邻接表 */
-export interface AdjacencyLists {
-  /** nodePath → 所有后级节点路径 */
-  forward: Map<string, string[]>
-  /** nodePath → 所有前级节点路径 */
-  reverse: Map<string, string[]>
-}
+import type { AdjacencyLists } from '@/types/graph'
 
 /**
  * 从 BswMModel 的引用关系构建双向邻接表

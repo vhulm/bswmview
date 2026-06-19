@@ -15,7 +15,7 @@ import type {
   LogicalExpression, BswMRule, ActionList, BswMAction,
   ModeInitValue, ActionType
 } from '@/types/bswm'
-import { CONDITION_TYPE_MAP } from '@/types/bswm'
+import { CONDITION_TYPE_MAP } from '@/constants/layers'
 
 const PARSER_OPTIONS = {
   ignoreAttributes: false,
@@ -45,15 +45,19 @@ function defRefLastSegment(defRef: string): string {
   return defRef.split('/').pop() ?? ''
 }
 
-/** 在容器的 PARAMETER-VALUES 中查找指定 DEFINITION-REF 后缀的参数值 */
-function findParamValue(container: any, defRefSuffix: string): string | undefined {
+/** 从容器的 PARAMETER-VALUES 中提取所有参数对象（数组规范化） */
+function getAllParams(container: any): any[] {
   const numParams = container?.['PARAMETER-VALUES']?.['ECUC-NUMERICAL-PARAM-VALUE']
   const textParams = container?.['PARAMETER-VALUES']?.['ECUC-TEXTUAL-PARAM-VALUE']
-  const all = [
+  return [
     ...(Array.isArray(numParams) ? numParams : numParams ? [numParams] : []),
     ...(Array.isArray(textParams) ? textParams : textParams ? [textParams] : []),
   ]
-  for (const p of all) {
+}
+
+/** 在容器的 PARAMETER-VALUES 中查找指定 DEFINITION-REF 后缀的参数值 */
+function findParamValue(container: any, defRefSuffix: string): string | undefined {
+  for (const p of getAllParams(container)) {
     const defRef = getDefRef(p)
     if (defRef.endsWith(defRefSuffix)) return p?.['VALUE'] ?? undefined
   }
@@ -463,13 +467,8 @@ function parseModeInitValue(container: any, path: string): ModeInitValue {
   const name = getShortName(container)
   const values: Record<string, string> = {}
 
-  // 复用 findParamValue 的数组规范化逻辑提取所有参数
-  const numParams = container?.['PARAMETER-VALUES']?.['ECUC-NUMERICAL-PARAM-VALUE']
-  const textParams = container?.['PARAMETER-VALUES']?.['ECUC-TEXTUAL-PARAM-VALUE']
-  const all = [
-    ...(Array.isArray(numParams) ? numParams : numParams ? [numParams] : []),
-    ...(Array.isArray(textParams) ? textParams : textParams ? [textParams] : []),
-  ]
+  // 复用 getAllParams 提取所有参数
+  const all = getAllParams(container)
   for (const p of all) {
     const defRef = getDefRef(p)
     const value = p?.['VALUE']

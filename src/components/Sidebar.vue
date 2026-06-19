@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { useBswMStore } from '@/stores/bswm-store'
-import type { NodeLayer } from '@/types/bswm'
-import { LAYER_LABEL, LAYER_COLORS } from '@/types/bswm'
+import type { NodeLayer } from '@/constants/layers'
+import { LAYER_LABEL, LAYER_COLORS } from '@/constants/layers'
+import { usePlatform } from '@/composables/usePlatform'
 
 const props = withDefaults(defineProps<{
   width: number
@@ -70,6 +71,8 @@ function toggleSection(layer: string) {
 }
 
 // ---- 图层过滤 ----
+const layerFilterCollapsed = ref(false)
+
 const layerEntries = computed(() =>
   (Object.keys(LAYER_LABEL) as NodeLayer[]).map(layer => ({
     layer,
@@ -111,6 +114,8 @@ function getLayerColor(layer: string): string {
 
 // ---- 文件加载 ----
 const loadedFileName = ref('')
+const lastFilePath = ref('')
+const { isTauri, openNativeFile, reloadNativeFile } = usePlatform()
 
 function onFileChange(e: Event) {
   const input = e.target as HTMLInputElement
@@ -123,15 +128,42 @@ function onFileChange(e: Event) {
   input.value = ''
 }
 
+/** Tauri 环境：通过原生文件对话框打开文件 */
+async function onOpenNativeFile() {
+  try {
+    const result = await openNativeFile()
+    if (!result) return
+    loadedFileName.value = result.name
+    lastFilePath.value = result.path ?? ''
+    await store.loadArxml(result.content)
+  } catch (e) {
+    console.error('打开文件失败:', e)
+  }
+}
+
+/** Tauri 环境：重新加载上次打开的文件 */
+async function onReloadFile() {
+  if (!lastFilePath.value) return
+  try {
+    const result = await reloadNativeFile(lastFilePath.value)
+    loadedFileName.value = result.name
+    await store.loadArxml(result.content)
+  } catch (e) {
+    console.error('重新加载文件失败:', e)
+  }
+}
+
+/** 加载示例文件（Tauri 和浏览器统一使用 fetch） */
 async function loadDemo() {
   try {
-    const resp = await fetch('/BswM.arxml')
+    const resp = await fetch('/sample/BswM.arxml')
     if (!resp.ok) {
       console.warn('示例文件不可用:', resp.status, resp.statusText)
       return
     }
     const text = await resp.text()
     loadedFileName.value = 'BswM.arxml'
+    lastFilePath.value = ''
     await store.loadArxml(text)
   } catch (e) {
     console.error('加载示例文件失败:', e)
@@ -172,7 +204,14 @@ function onEntityClick(path: string) {
         <div class="flex-1 text-xs text-gray-400 truncate min-w-0">
           {{ loadedFileName || '未选择文件' }}
         </div>
-        <label class="shrink-0 cursor-pointer text-xs py-1 px-3 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 transition">
+        <!-- Tauri 环境：原生文件对话框 -->
+        <button
+          v-if="isTauri"
+          @click="onOpenNativeFile"
+          class="shrink-0 text-xs py-1 px-3 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 transition cursor-pointer"
+        >选择文件</button>
+        <!-- 浏览器环境：HTML file input -->
+        <label v-else class="shrink-0 cursor-pointer text-xs py-1 px-3 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 transition">
           选择文件
           <input
             type="file"
@@ -183,6 +222,13 @@ function onEntityClick(path: string) {
         </label>
       </div>
       <button
+        v-if="isTauri && lastFilePath"
+        @click="onReloadFile"
+        class="w-full text-xs py-1.5 px-3 bg-green-500 text-white rounded hover:bg-green-600 transition cursor-pointer mt-2"
+      >
+        🔄 重新加载
+      </button>
+      <button
         @click="loadDemo"
         class="w-full text-xs py-1.5 px-3 bg-blue-500 text-white rounded hover:bg-blue-600 transition cursor-pointer mt-2"
       >
@@ -191,9 +237,15 @@ function onEntityClick(path: string) {
     </div>
 
     <!-- 图层过滤 -->
-    <div class="p-3 border-b border-gray-100">
-      <h3 class="text-xs font-semibold text-gray-500 mb-2">🔍 图层过滤</h3>
-      <div class="space-y-1">
+    <div class="border-b border-gray-100">
+      <button
+        @click="layerFilterCollapsed = !layerFilterCollapsed"
+        class="w-full px-3 py-2 flex items-center justify-between hover:bg-gray-50 transition cursor-pointer"
+      >
+        <span class="text-xs font-semibold text-gray-500">🔍 图层过滤</span>
+        <span class="text-gray-400 text-xs">{{ layerFilterCollapsed ? '▸' : '▾' }}</span>
+      </button>
+      <div v-if="!layerFilterCollapsed" class="px-3 pb-3 space-y-1">
         <label
           v-for="entry in layerEntries"
           :key="entry.layer"

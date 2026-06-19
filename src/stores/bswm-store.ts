@@ -4,14 +4,12 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed, shallowRef } from 'vue'
-import type { BswMModel, BswMRule, NodeLayer } from '@/types/bswm'
-import { parseBswMArxml } from '@/parser/arxml-parser'
-import { buildGraph } from '@/graph/graph-builder'
-import { applyElkLayout } from '@/graph/layout'
-import { buildAdjacency, traceChain, findUnusedNodes } from '@/graph/chain-tracer'
+import type { BswMModel, BswMRule } from '@/types/bswm'
+import type { NodeLayer } from '@/constants/layers'
+import { parseBswMArxml, buildGraph, applyElkLayout, buildAdjacency, traceChain, findUnusedNodes } from '@/core'
 import type { Node, Edge } from '@vue-flow/core'
-import type { BswMNodeData } from '@/graph/graph-builder'
-import type { AdjacencyLists } from '@/graph/chain-tracer'
+import type { BswMNodeData } from '@/types/graph'
+import type { AdjacencyLists } from '@/types/graph'
 
 export const useBswMStore = defineStore('bswm', () => {
   // ---- 状态 ----

@@ -1,24 +1,24 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch, shallowRef, watchEffect, markRaw } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch, markRaw } from 'vue'
 import type { Component } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import type { NodeMouseEvent } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
-import type { NodeLayer } from '@/types/bswm'
 
-import RequestPortNode from '@/graph/nodes/RequestPortNode.vue'
-import ConditionNode from '@/graph/nodes/ConditionNode.vue'
-import ExpressionNode from '@/graph/nodes/ExpressionNode.vue'
-import RuleNode from '@/graph/nodes/RuleNode.vue'
-import ActionListNode from '@/graph/nodes/ActionListNode.vue'
-import ActionNode from '@/graph/nodes/ActionNode.vue'
+import RequestPortNode from '@/components/nodes/RequestPortNode.vue'
+import ConditionNode from '@/components/nodes/ConditionNode.vue'
+import ExpressionNode from '@/components/nodes/ExpressionNode.vue'
+import RuleNode from '@/components/nodes/RuleNode.vue'
+import ActionListNode from '@/components/nodes/ActionListNode.vue'
+import ActionNode from '@/components/nodes/ActionNode.vue'
 
 import Sidebar from './Sidebar.vue'
 import Toolbar from './Toolbar.vue'
 import DetailPanel from './DetailPanel.vue'
 
 import { useBswMStore } from '@/stores/bswm-store'
+import { useGraphFilter } from '@/composables/useGraphFilter'
 
 const store = useBswMStore()
 const { fitView, onNodeClick } = useVueFlow()
@@ -45,63 +45,8 @@ onNodeClick((event: NodeMouseEvent) => {
   store.focusNode(path)
 })
 
-// ---- 节点/边标注：图层过滤 + 链路内红框 + 链路外 dimmed ----
-// 使用 shallowRef + watchEffect，使 v-model 可写
-const highlightedNodes = shallowRef<any[]>([])
-const highlightedEdges = shallowRef<any[]>([])
-
-watchEffect(() => {
-  const chainIds = store.focusedChainIds
-  const visibility = store.layerVisibility
-  const unusedPaths = store.unusedNodePaths
-
-  // 图层过滤 + 高亮/dimmed/unused 标注（单次遍历）
-  const visibleNodes = store.nodes.filter((n: any) => {
-    const layer = n.data?.layer as NodeLayer | undefined
-    return layer ? visibility[layer] : true
-  })
-  const visibleNodeIds = new Set(visibleNodes.map((n: any) => n.id))
-
-  if (!chainIds) {
-    highlightedNodes.value = visibleNodes.map((n: any) => ({
-      ...n,
-      data: {
-        ...n.data,
-        highlighted: false,
-        dimmed: false,
-        unused: unusedPaths.has(n.id),
-      },
-    }))
-  } else {
-    highlightedNodes.value = visibleNodes.map((n: any) => {
-      const inChain = chainIds.has(n.id)
-      return {
-        ...n,
-        data: {
-          ...n.data,
-          highlighted: inChain,
-          dimmed: !inChain,
-          unused: unusedPaths.has(n.id),
-        },
-      }
-    })
-  }
-
-  // 边：仅保留两端节点都可见的边
-  const visibleEdges = store.edges.filter((e: any) =>
-    visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target)
-  )
-
-  if (!chainIds) {
-    highlightedEdges.value = visibleEdges
-  } else {
-    highlightedEdges.value = visibleEdges.map((e: any) => {
-      const inChain = chainIds.has(e.source) && chainIds.has(e.target)
-      if (inChain) return e
-      return { ...e, style: { ...e.style, opacity: 0.15 }, animated: false }
-    })
-  }
-})
+// ---- 图层过滤 + 链路高亮 + dimmed 标注（独立 composable） ----
+const { filteredNodes, filteredEdges } = useGraphFilter()
 
 // ---- 定时器清理 ----
 const pendingTimers = new Set<ReturnType<typeof setTimeout>>()
@@ -141,8 +86,9 @@ watch(() => store.focusedNodePath, (path) => {
 })
 
 onMounted(async () => {
+  // 统一使用 fetch 加载示例文件（Tauri 和浏览器都适用）
   try {
-    const resp = await fetch('/BswM.arxml')
+    const resp = await fetch('/sample/BswM.arxml')
     if (resp.ok) {
       const text = await resp.text()
       await store.loadArxml(text)
@@ -177,8 +123,8 @@ onMounted(async () => {
 
       <div class="flex-1 relative">
         <VueFlow
-          v-model:nodes="highlightedNodes"
-          v-model:edges="highlightedEdges"
+          v-model:nodes="filteredNodes"
+          v-model:edges="filteredEdges"
           :node-types="nodeTypes"
           :default-viewport="{ zoom: 0.6, x: 50, y: 50 }"
           :min-zoom="0.1"
