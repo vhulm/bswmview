@@ -142,6 +142,17 @@ watch(() => store.focusedNodePath, (path) => {
 
 onMounted(async () => {
   try {
+    // Electron 环境：通过 IPC 读取示例文件
+    const api = window.electronAPI
+    if (api) {
+      const result = await api.loadDemoFile()
+      if (result) {
+        await store.loadArxml(result.content)
+        scheduleTimeout(() => fitView({ padding: 0.2 }), 500)
+        return
+      }
+    }
+    // 浏览器环境：通过 fetch 加载
     const resp = await fetch('/BswM.arxml')
     if (resp.ok) {
       const text = await resp.text()

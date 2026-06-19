@@ -112,6 +112,9 @@ function getLayerColor(layer: string): string {
 // ---- 文件加载 ----
 const loadedFileName = ref('')
 
+/** 是否在 Electron 环境中运行 */
+const isElectron = !!window.electronAPI
+
 function onFileChange(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
@@ -123,7 +126,32 @@ function onFileChange(e: Event) {
   input.value = ''
 }
 
+/** Electron 环境：通过原生文件对话框打开文件 */
+async function openNativeFile() {
+  const api = window.electronAPI
+  if (!api) return
+  const result = await api.openFile()
+  if (!result) return
+  loadedFileName.value = result.name
+  await store.loadArxml(result.content)
+}
+
 async function loadDemo() {
+  const api = window.electronAPI
+  if (api) {
+    // Electron 环境：通过 IPC 从文件系统读取
+    try {
+      const result = await api.loadDemoFile()
+      if (result) {
+        loadedFileName.value = result.name
+        await store.loadArxml(result.content)
+        return
+      }
+    } catch (e) {
+      console.error('Electron 加载示例文件失败:', e)
+    }
+  }
+  // 浏览器环境：通过 fetch 加载
   try {
     const resp = await fetch('/BswM.arxml')
     if (!resp.ok) {
@@ -172,7 +200,14 @@ function onEntityClick(path: string) {
         <div class="flex-1 text-xs text-gray-400 truncate min-w-0">
           {{ loadedFileName || '未选择文件' }}
         </div>
-        <label class="shrink-0 cursor-pointer text-xs py-1 px-3 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 transition">
+        <!-- Electron 环境：原生文件对话框 -->
+        <button
+          v-if="isElectron"
+          @click="openNativeFile"
+          class="shrink-0 text-xs py-1 px-3 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 transition cursor-pointer"
+        >选择文件</button>
+        <!-- 浏览器环境：HTML file input -->
+        <label v-else class="shrink-0 cursor-pointer text-xs py-1 px-3 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 transition">
           选择文件
           <input
             type="file"

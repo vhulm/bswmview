@@ -1,0 +1,15 @@
+appId: com.bswmviewer.app
+productName: BswMViewer
+directories:
+  output: dist/release
+files:
+  - dist/electron
+  - dist/web
+linux:
+  target:
+    - AppImage
+  category: Development
+win:
+  target:
+    - nsis
+  icon: public/icon.png

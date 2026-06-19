@@ -1,11 +1,20 @@
 {
   "name": "bswmview",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "AUTOSAR BswM 配置可视化工具",
+  "author": {
+    "name": "BswM Viewer",
+    "email": "bswmview@example.com"
+  },
   "type": "module",
+  "main": "dist/electron/main.js",
   "scripts": {
     "dev": "vite",
+    "dev:electron": "ELECTRON=true vite",
     "build": "vue-tsc -b && vite build",
+    "build:electron": "vue-tsc -b && ELECTRON=true vite build && electron-builder",
+    "build:dir": "vue-tsc -b && ELECTRON=true vite build && electron-builder --dir",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -22,8 +31,11 @@
     "@types/node": "^24.12.3",
     "@vitejs/plugin-vue": "^6.0.6",
     "@vue/tsconfig": "^0.9.1",
+    "electron": "^42.4.1",
+    "electron-builder": "^26.15.5",
     "typescript": "~6.0.2",
     "vite": "^8.0.12",
+    "vite-plugin-electron": "^1.0.4",
     "vue-tsc": "^3.3.5"
   }
 }
