@@ -101,7 +101,6 @@ function onClearSearch() {
 <template>
   <div class="h-10 bg-white border-b border-gray-200 flex items-center px-3 gap-2">
     <span class="text-sm font-semibold text-gray-700">BswM Viewer</span>
-    <span class="text-xs text-gray-400">AUTOSAR 配置可视化</span>
     <div class="w-px h-5 bg-gray-300 mx-1"></div>
 
     <button @click="zoomIn()" class="tool-btn" title="放大">➕</button>

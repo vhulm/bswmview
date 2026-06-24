@@ -1,21 +1,17 @@
 // ============================================================
-// ARXML 解析器 — 将 AUTOSAR BswM ARXML 解析为 BswMModel
+// ARXML 解析器 — 通用范式处理器
 //
 // 设计原则:
-//   1. 节点 path/id 与 ARXML VALUE-REF 路径一致，引用天然匹配
-//   2. 从 AR-PACKAGE SHORT-NAME 动态提取 ECU 前缀，不硬编码
-//   3. 递归搜索 AR-PACKAGE 树，兼容嵌套结构
-//   4. 支持 BswMPartition 容器
-//   5. 未识别的 Action 类型保留原始 DEFINITION-REF 名称，不伪装
+//   1. 通用: 所有 ECUC-CONTAINER-VALUE 统一为 BswMEntity，零 if-else 分发
+//   2. 完整: 自动提取所有参数和引用，零信息丢失
+//   3. 递归: 子容器完整解析保留，深层结构不丢弃
+//   4. 声明式: 层级分类由 ENTITY_LAYER_MAP 配置，不由代码逻辑判定
+//   5. 路径驱动: 节点 path 与 ARXML VALUE-REF 一致，引用天然匹配
 // ============================================================
 
 import { XMLParser } from 'fast-xml-parser'
-import type {
-  BswMModel, BswMGeneral, ModeRequestPort, ModeCondition,
-  LogicalExpression, BswMRule, ActionList, BswMAction,
-  ModeInitValue, ActionType
-} from '@/types/bswm'
-import { CONDITION_TYPE_MAP } from '@/constants/layers'
+import type { BswMModel, BswMEntity } from '@/types/bswm'
+import { ENTITY_LAYER_MAP } from '@/constants/layers'
 
 const PARSER_OPTIONS = {
   ignoreAttributes: false,
@@ -25,6 +21,7 @@ const PARSER_OPTIONS = {
     'ECUC-NUMERICAL-PARAM-VALUE',
     'ECUC-TEXTUAL-PARAM-VALUE',
     'ECUC-REFERENCE-VALUE',
+    'ECUC-MODULE-CONFIGURATION-VALUES',
     'AR-PACKAGE',
   ].includes(name),
   processEntities: false,
@@ -55,45 +52,6 @@ function getAllParams(container: any): any[] {
   ]
 }
 
-/** 在容器的 PARAMETER-VALUES 中查找指定 DEFINITION-REF 后缀的参数值 */
-function findParamValue(container: any, defRefSuffix: string): string | undefined {
-  for (const p of getAllParams(container)) {
-    const defRef = getDefRef(p)
-    if (defRef.endsWith(defRefSuffix)) return p?.['VALUE'] ?? undefined
-  }
-  return undefined
-}
-
-/** 在容器的 REFERENCE-VALUES 中查找指定 DEFINITION-REF 后缀的引用值 */
-function findRefValue(container: any, defRefSuffix: string): string | undefined {
-  const refs = container?.['REFERENCE-VALUES']?.['ECUC-REFERENCE-VALUE']
-  if (!refs) return undefined
-  const all = Array.isArray(refs) ? refs : [refs]
-  for (const r of all) {
-    const defRef = getDefRef(r)
-    if (defRef.endsWith(defRefSuffix)) {
-      return r?.['VALUE-REF']?.['#text'] ?? r?.['VALUE-REF'] ?? undefined
-    }
-  }
-  return undefined
-}
-
-/** 在容器的 REFERENCE-VALUES 中查找所有匹配 DEFINITION-REF 后缀的引用值 */
-function findAllRefValues(container: any, defRefSuffix: string): string[] {
-  const refs = container?.['REFERENCE-VALUES']?.['ECUC-REFERENCE-VALUE']
-  if (!refs) return []
-  const all = Array.isArray(refs) ? refs : [refs]
-  const results: string[] = []
-  for (const r of all) {
-    const defRef = getDefRef(r)
-    if (defRef.endsWith(defRefSuffix)) {
-      const val = r?.['VALUE-REF']?.['#text'] ?? r?.['VALUE-REF']
-      if (val) results.push(val)
-    }
-  }
-  return results
-}
-
 function getSubContainers(container: any): any[] {
   const subs = container?.['SUB-CONTAINERS']?.['ECUC-CONTAINER-VALUE']
   if (!subs) return []
@@ -106,10 +64,53 @@ function getContainers(container: any): any[] {
   return Array.isArray(subs) ? subs : [subs]
 }
 
-/** 读取布尔参数，缺失时返回默认值 */
-function boolParam(container: any, suffix: string, def = false): boolean {
-  const val = findParamValue(container, suffix)
-  return val !== undefined ? val === 'true' : def
+// ============================================================
+// 通用容器解析 — 核心函数
+// ============================================================
+
+/**
+ * 将一个 ECUC-CONTAINER-VALUE 解析为 BswMEntity
+ *
+ * 自动提取所有参数和引用，递归解析子容器。
+ * 不做任何领域判断，零信息丢失。
+ */
+function parseContainer(container: any, path: string): BswMEntity {
+  const name = getShortName(container)
+  const type = defRefLastSegment(getDefRef(container))
+
+  // 自动提取所有参数: 参数定义名 → value
+  const params = new Map<string, string>()
+  for (const p of getAllParams(container)) {
+    const key = defRefLastSegment(getDefRef(p))
+    const value = p?.['VALUE']
+    if (key && value !== undefined) {
+      params.set(key, String(value))
+    }
+  }
+
+  // 自动提取容器自身的所有引用: 引用定义名 → 目标路径列表
+  const refs = new Map<string, string[]>()
+  const rawRefs = container?.['REFERENCE-VALUES']?.['ECUC-REFERENCE-VALUE']
+  if (rawRefs) {
+    const all = Array.isArray(rawRefs) ? rawRefs : [rawRefs]
+    for (const r of all) {
+      const key = defRefLastSegment(getDefRef(r))
+      const val = r?.['VALUE-REF']?.['#text'] ?? r?.['VALUE-REF']
+      if (key && val) {
+        const list = refs.get(key) ?? []
+        list.push(val)
+        refs.set(key, list)
+      }
+    }
+  }
+
+  // 递归解析子容器
+  const subContainers = getSubContainers(container).map(sub => {
+    const subName = getShortName(sub)
+    return parseContainer(sub, `${path}/${subName}`)
+  })
+
+  return { name, path, type, params, refs, subContainers }
 }
 
 // ============================================================
@@ -127,91 +128,71 @@ export function parseBswMArxml(xmlContent: string): BswMModel {
   const { module: bswmModule, ecuPrefix } = findBswmModule(arPackages)
   if (!bswmModule) throw new Error('无法找到 BswM 模块配置（EcuC 格式）。此文件可能是非 EcuC 格式的 ARXML，不支持解析。')
 
-  // ---- 2. 找到 BswMGeneral 和 BswMConfig ----
+  // ---- 2. 找到 BswMConfig ----
   const topContainers = getContainers(bswmModule)
-  let generalContainer: any = null
   let configContainer: any = null
   for (const c of topContainers) {
     const defRef = getDefRef(c)
-    if (defRef.endsWith('BswMGeneral')) generalContainer = c
     if (defRef.endsWith('BswMConfig')) configContainer = c
   }
-
-  const general = parseGeneral(generalContainer)
 
   // ---- 3. 找到 BswMArbitration 和 BswMModeControl ----
   // 兼容两种结构:
   //   a) BswMConfig 直接包含 BswMArbitration / BswMModeControl
   //   b) BswMConfig 包含 BswMPartition，Partition 内再包含上述容器
   const configSubs = getSubContainers(configContainer)
-  const arbitrationContainers: any[] = []
-  const modeControlContainers: any[] = []
+  interface ContainerWithPath { container: any; pathPrefix: string }
+  const arbitrationContainers: ContainerWithPath[] = []
+  const modeControlContainers: ContainerWithPath[] = []
+
+  const baseConfigPath = `${ecuPrefix}/BswM/BswMConfig`
 
   for (const c of configSubs) {
     const defRef = getDefRef(c)
     if (defRef.endsWith('BswMArbitration')) {
-      arbitrationContainers.push(c)
+      arbitrationContainers.push({ container: c, pathPrefix: `${baseConfigPath}/BswMArbitration` })
     } else if (defRef.endsWith('BswMModeControl')) {
-      modeControlContainers.push(c)
+      modeControlContainers.push({ container: c, pathPrefix: `${baseConfigPath}/BswMModeControl` })
     } else if (defRef.endsWith('BswMPartition')) {
-      // 进入 Partition 内部查找
+      // 进入 Partition 内部查找，路径前缀包含 Partition 的 SHORT-NAME
+      const partitionName = getShortName(c)
+      const partitionPrefix = `${baseConfigPath}/${partitionName}`
       for (const pc of getSubContainers(c)) {
         const pcDefRef = getDefRef(pc)
-        if (pcDefRef.endsWith('BswMArbitration')) arbitrationContainers.push(pc)
-        else if (pcDefRef.endsWith('BswMModeControl')) modeControlContainers.push(pc)
+        if (pcDefRef.endsWith('BswMArbitration'))
+          arbitrationContainers.push({ container: pc, pathPrefix: `${partitionPrefix}/BswMArbitration` })
+        else if (pcDefRef.endsWith('BswMModeControl'))
+          modeControlContainers.push({ container: pc, pathPrefix: `${partitionPrefix}/BswMModeControl` })
       }
     }
   }
 
-  // 路径前缀: 与 ARXML VALUE-REF 保持一致
-  const arbPathPrefix = `${ecuPrefix}/BswM/BswMConfig/BswMArbitration`
-  const mcPathPrefix  = `${ecuPrefix}/BswM/BswMConfig/BswMModeControl`
+  // ---- 4. 解析实体 — 仅处理 ENTITY_LAYER_MAP 中定义的 6 种核心类型 ----
+  const entities = new Map<string, BswMEntity>()
 
-  const requestPorts = new Map<string, ModeRequestPort>()
-  const conditions   = new Map<string, ModeCondition>()
-  const expressions  = new Map<string, LogicalExpression>()
-  const rules        = new Map<string, BswMRule>()
-  const actionLists  = new Map<string, ActionList>()
-  const actions      = new Map<string, BswMAction>()
-  const modeInitValues = new Map<string, ModeInitValue>()
-
-  // ---- 4. 解析所有 BswMArbitration ----
-  for (const arbContainer of arbitrationContainers) {
-    for (const container of getSubContainers(arbContainer)) {
-      const defRef = getDefRef(container)
-      const name = getShortName(container)
+  for (const { container: arbContainer, pathPrefix: arbPathPrefix } of arbitrationContainers) {
+    for (const sub of getSubContainers(arbContainer)) {
+      const defRef = getDefRef(sub)
+      if (!Object.prototype.hasOwnProperty.call(ENTITY_LAYER_MAP, defRefLastSegment(defRef))) continue
+      const name = getShortName(sub)
       const path = `${arbPathPrefix}/${name}`
-
-      if (defRef.endsWith('BswMModeRequestPort')) {
-        requestPorts.set(path, parseRequestPort(container, path))
-      } else if (defRef.endsWith('BswMModeCondition')) {
-        conditions.set(path, parseCondition(container, path))
-      } else if (defRef.endsWith('BswMLogicalExpression')) {
-        expressions.set(path, parseExpression(container, path))
-      } else if (defRef.endsWith('BswMRule')) {
-        rules.set(path, parseRule(container, path))
-      } else if (defRef.endsWith('BswMModeInitValue')) {
-        modeInitValues.set(path, parseModeInitValue(container, path))
-      }
+      const entity = parseContainer(sub, path)
+      entities.set(entity.path, entity)
     }
   }
 
-  // ---- 5. 解析所有 BswMModeControl ----
-  for (const mcContainer of modeControlContainers) {
-    for (const container of getSubContainers(mcContainer)) {
-      const defRef = getDefRef(container)
-      const name = getShortName(container)
+  for (const { container: mcContainer, pathPrefix: mcPathPrefix } of modeControlContainers) {
+    for (const sub of getSubContainers(mcContainer)) {
+      const defRef = getDefRef(sub)
+      if (!Object.prototype.hasOwnProperty.call(ENTITY_LAYER_MAP, defRefLastSegment(defRef))) continue
+      const name = getShortName(sub)
       const path = `${mcPathPrefix}/${name}`
-
-      if (defRef.endsWith('BswMAction')) {
-        actions.set(path, parseAction(container, path))
-      } else if (defRef.endsWith('BswMActionList')) {
-        actionLists.set(path, parseActionList(container, path))
-      }
+      const entity = parseContainer(sub, path)
+      entities.set(entity.path, entity)
     }
   }
 
-  return { general, requestPorts, conditions, expressions, rules, actionLists, actions, modeInitValues }
+  return { entities }
 }
 
 // ============================================================
@@ -231,8 +212,7 @@ function findBswmModule(arPackages: any): { module: any; ecuPrefix: string } {
     // 在当前包的 ELEMENTS 中查找
     const elements = pkg?.['ELEMENTS']?.['ECUC-MODULE-CONFIGURATION-VALUES']
     if (elements) {
-      const elems = Array.isArray(elements) ? elements : [elements]
-      for (const elem of elems) {
+      for (const elem of elements) {
         if (getShortName(elem) === 'BswM') {
           return { module: elem, ecuPrefix: `/${pkgName}` }
         }
@@ -250,233 +230,3 @@ function findBswmModule(arPackages: any): { module: any; ecuPrefix: string } {
   return { module: null, ecuPrefix: '' }
 }
 
-// ============================================================
-// 子解析函数
-// ============================================================
-
-function parseGeneral(container: any): BswMGeneral {
-  return {
-    canSMEnabled: boolParam(container, 'BswMCanSMEnabled'),
-    comMEnabled: boolParam(container, 'BswMComMEnabled'),
-    dcmEnabled: boolParam(container, 'BswMDcmEnabled'),
-    ecuMEnabled: boolParam(container, 'BswMEcuMEnabled'),
-    nmEnabled: boolParam(container, 'BswMNmEnabled'),
-    nvMEnabled: boolParam(container, 'BswMNvMEnabled'),
-    genericRequestEnabled: boolParam(container, 'BswMGenericRequestEnabled'),
-    mainFunctionPeriod: parseFloat(findParamValue(container, 'BswMMainFunctionPeriod') ?? '0.01'),
-    cloneVariableSupport: boolParam(container, 'BswMCloneVariableSupport'),
-    devErrorDetect: boolParam(container, 'BswMDevErrorDetect'),
-    ethIfEnabled: boolParam(container, 'BswMEthIfEnabled'),
-    ethSMEnabled: boolParam(container, 'BswMEthSMEnabled'),
-    frSMEnabled: boolParam(container, 'BswMFrSMEnabled'),
-    j1939DcmEnabled: boolParam(container, 'BswMJ1939DcmEnabled'),
-    j1939NmEnabled: boolParam(container, 'BswMJ1939NmEnabled'),
-    linSMEnabled: boolParam(container, 'BswMLinSMEnabled'),
-    linTPEnabled: boolParam(container, 'BswMLinTPEnabled'),
-    sdControlEnabled: boolParam(container, 'BswMSdControlEnabled'),
-    sdEnabled: boolParam(container, 'BswMSdEnabled'),
-    versionInfoApi: boolParam(container, 'BswMVersionInfoApi'),
-  }
-}
-
-function parseRequestPort(container: any, path: string): ModeRequestPort {
-  const name = getShortName(container)
-  const rawProcessing = findParamValue(container, 'BswMRequestProcessing')?.replace('BSWM_', '')
-  const processing: ModeRequestPort['processing'] = rawProcessing === 'DEFERRED' ? 'DEFERRED' : 'IMMEDIATE'
-
-  const source: ModeRequestPort['source'] = { type: 'EcuMIndication' }
-  for (const sub of getSubContainers(container)) {
-    if (!getDefRef(sub).endsWith('BswMModeRequestSource')) continue
-    for (const srcSub of getSubContainers(sub)) {
-      const srcDefRef = getDefRef(srcSub)
-      if (srcDefRef.endsWith('BswMEcuMIndication')) {
-        source.type = 'EcuMIndication'
-      } else if (srcDefRef.endsWith('BswMEcuMRUNRequestIndication')) {
-        source.type = 'EcuMRUNRequestIndication'
-        source.protocolPort = findParamValue(srcSub, 'BswMEcuMRUNRequestProtocolPort')?.replace('BSWM_', '')
-      } else if (srcDefRef.endsWith('BswMEcuMWakeupSource')) {
-        source.type = 'EcuMWakeupSource'
-        source.reference = findRefValue(srcSub, 'BswMEcuMWakeupSrcRef')
-      } else if (srcDefRef.endsWith('BswMCanSMIndication')) {
-        source.type = 'CanSMIndication'
-        source.reference = findRefValue(srcSub, 'BswMCanSMChannelRef')
-      } else if (srcDefRef.endsWith('BswMComMIndication')) {
-        source.type = 'ComMIndication'
-        source.reference = findRefValue(srcSub, 'BswMComMChannelRef')
-      } else if (srcDefRef.endsWith('BswMComMPncRequest')) {
-        source.type = 'ComMPncRequest'
-        source.reference = findRefValue(srcSub, 'BswMComMPncChannelRef')
-      } else if (srcDefRef.endsWith('BswMDcmComModeRequest')) {
-        source.type = 'DcmComModeRequest'
-        source.reference = findRefValue(srcSub, 'BswMDcmComMChannelRef')
-      } else if (srcDefRef.endsWith('BswMGenericRequest')) {
-        source.type = 'GenericRequest'
-        const id = findParamValue(srcSub, 'BswMModeRequesterId')
-        source.requesterId = id ? parseInt(id, 10) : undefined
-      } else if (srcDefRef.endsWith('BswMTimer')) {
-        source.type = 'Timer'
-      }
-    }
-  }
-
-  return { name, path, processing, source }
-}
-
-function parseCondition(container: any, path: string): ModeCondition {
-  const name = getShortName(container)
-  const rawType = findParamValue(container, 'BswMConditionType') ?? 'BSWM_EQUALS'
-  const conditionType = CONDITION_TYPE_MAP[rawType] ?? 'EQUALS'
-  const modeRequestPortRef = findRefValue(container, 'BswMConditionMode') ?? ''
-
-  let compareValue = ''
-  let compareValueType: ModeCondition['compareValueType'] = 'enumeration'
-
-  for (const sub of getSubContainers(container)) {
-    if (!getDefRef(sub).endsWith('BswMConditionValue')) continue
-    for (const modeSub of getSubContainers(sub)) {
-      if (!getDefRef(modeSub).endsWith('BswMBswMode')) continue
-      const enumVal = findParamValue(modeSub, 'BswModeCompareValue')
-      const strVal = findParamValue(modeSub, 'BswMBswRequestedMode')
-      if (enumVal) {
-        compareValue = enumVal
-        compareValueType = 'enumeration'
-      } else if (strVal) {
-        compareValue = strVal
-        compareValueType = 'string'
-      }
-    }
-  }
-
-  return { name, path, conditionType, modeRequestPortRef, compareValue, compareValueType }
-}
-
-function parseExpression(container: any, path: string): LogicalExpression {
-  const name = getShortName(container)
-  const rawOp = findParamValue(container, 'BswMLogicalOperator')
-  const operator = (rawOp?.replace('BSWM_', '') || 'AND') as LogicalExpression['operator']
-  const arguments_ = findAllRefValues(container, 'BswMArgumentRef')
-  return { name, path, operator, arguments: arguments_ }
-}
-
-function parseRule(container: any, path: string): BswMRule {
-  const name = getShortName(container)
-  const nestedExecutionOnly = findParamValue(container, 'BswMNestedExecutionOnly') === 'true'
-  const rawInitState = findParamValue(container, 'BswMRuleInitState')?.replace('BSWM_', '')
-  const initState = (rawInitState ?? 'UNDEFINED') as BswMRule['initState']
-  const expressionRef = findRefValue(container, 'BswMRuleExpressionRef') ?? ''
-  const trueActionListRef = findRefValue(container, 'BswMRuleTrueActionList')
-  const falseActionListRef = findRefValue(container, 'BswMRuleFalseActionList')
-  return {
-    name, path, nestedExecutionOnly, initState,
-    expressionRef,
-    trueActionListRef: trueActionListRef || undefined,
-    falseActionListRef: falseActionListRef || undefined,
-  }
-}
-
-function parseActionList(container: any, path: string): ActionList {
-  const name = getShortName(container)
-  const rawExec = findParamValue(container, 'BswMActionListExecution')
-  const execution = (rawExec?.replace('BSWM_', '') || 'TRIGGER') as ActionList['execution']
-  const items: ActionList['items'] = []
-  for (const sub of getSubContainers(container)) {
-    if (!getDefRef(sub).endsWith('BswMActionListItem')) continue
-    items.push({
-      index: parseInt(findParamValue(sub, 'BswMActionListItemIndex') ?? '0', 10),
-      abortOnFail: findParamValue(sub, 'BswMAbortOnFail') === 'true',
-      actionRef: findRefValue(sub, 'BswMActionListItemRef') ?? '',
-    })
-  }
-  items.sort((a: { index: number }, b: { index: number }) => a.index - b.index)
-  return { name, path, execution, items }
-}
-
-function parseAction(container: any, path: string): BswMAction {
-  const name = getShortName(container)
-  const details: BswMAction['details'] = {}
-  let actionType: ActionType = 'Unknown'
-
-  for (const sub of getSubContainers(container)) {
-    if (!getDefRef(sub).endsWith('BswMAvailableActions')) continue
-    for (const availSub of getSubContainers(sub)) {
-      const availDefRef = getDefRef(availSub)
-
-      if (availDefRef.endsWith('BswMEcuMDriverInitListBswM')) {
-        actionType = 'EcuMDriverInitList'
-        details.initListRef = findRefValue(availSub, 'BswMEcuMDriverInitListBswMRef') ?? ''
-      } else if (availDefRef.endsWith('BswMEcuMGoDownHaltPoll')) {
-        actionType = 'EcuMGoDown'
-        details.userIdRef = findRefValue(availSub, 'BswMEcuMUserIdRef') ?? ''
-      } else if (availDefRef.endsWith('BswMEcuMSelectShutdownTarget')) {
-        actionType = 'EcuMSelectShutdownTarget'
-        details.shutdownTarget = findParamValue(availSub, 'BswMEcuMShutdownTarget') ?? ''
-        details.sleepModeRef = findRefValue(availSub, 'BswMEcuMSleepModeRef') ?? ''
-      } else if (availDefRef.endsWith('BswMEcuMStateSwitch')) {
-        actionType = 'EcuMStateSwitch'
-        details.ecuMState = findParamValue(availSub, 'BswMEcuMState') ?? ''
-      } else if (availDefRef.endsWith('BswMComMAllowCom')) {
-        actionType = 'ComMAllowCom'
-        details.comAllowed = findParamValue(availSub, 'BswMComAllowed') === 'true'
-        details.channelRef = findRefValue(availSub, 'BswMComMAllowChannelRef') ?? ''
-      } else if (availDefRef.endsWith('BswMComMModeSwitch')) {
-        actionType = 'ComMModeSwitch'
-        details.requestedMode = findParamValue(availSub, 'BswMComMRequestedMode') ?? ''
-        details.userRef = findRefValue(availSub, 'BswMComMUserRef') ?? ''
-      } else if (availDefRef.endsWith('BswMPduGroupSwitch')) {
-        actionType = 'PduGroupSwitch'
-        details.reinit = findParamValue(availSub, 'BswMPduGroupSwitchReinit') === 'true'
-        details.enabledPduGroupRef = findRefValue(availSub, 'BswMEnabledPduGroupRef') ?? ''
-        details.disabledPduGroupRef = findRefValue(availSub, 'BswMDisabledPduGroupRef') ?? ''
-      } else if (availDefRef.endsWith('BswMDeadlineMonitoringControl')) {
-        actionType = 'DeadlineMonitoringControl'
-        details.enabledDMPduGroupRef = findRefValue(availSub, 'BswMEnabledDMPduGroupRef') ?? ''
-        details.disabledDMPduGroupRef = findRefValue(availSub, 'BswMDisabledDMPduGroupRef') ?? ''
-      } else if (availDefRef.endsWith('BswMNMControl')) {
-        actionType = 'NMControl'
-        details.nmAction = findParamValue(availSub, 'BswMNMAction') ?? ''
-        details.networkHandleRef = findRefValue(availSub, 'BswMComMNetworkHandleRef') ?? ''
-      } else if (availDefRef.endsWith('BswMUserCallout')) {
-        actionType = 'UserCallout'
-        details.calloutFunction = findParamValue(availSub, 'BswMUserCalloutFunction') ?? ''
-      } else if (availDefRef.endsWith('BswMRteSwitch')) {
-        actionType = 'RteSwitch'
-        details.rteModeGroupRef = findRefValue(availSub, 'BswMRteModeGroupRef') ?? ''
-      } else if (availDefRef.endsWith('BswMSchMModeSwitch')) {
-        actionType = 'SchMModeSwitch'
-        details.schMModeGroupRef = findRefValue(availSub, 'BswMSchMModeGroupRef') ?? ''
-      } else if (availDefRef.endsWith('BswMNvMBlockJobControl')) {
-        actionType = 'NvMBlockJobControl'
-        details.nvmBlockControl = findParamValue(availSub, 'BswMNvMBlockControl') ?? ''
-      } else if (availDefRef.endsWith('BswMPduRouterControl')) {
-        actionType = 'PduRouterControl'
-        details.pduRouterAction = findParamValue(availSub, 'BswMPduRouterAction') ?? ''
-        details.disableInitBuffer = findParamValue(availSub, 'BswMPduRouterDisableInitBuffer') === 'true'
-        details.routingPathGroupRef = findRefValue(availSub, 'BswMPduRoutingPathGroupRef') ?? ''
-      } else {
-        // 未识别的 Action 类型: 保留 DEFINITION-REF 最后一段作为类型名
-        const seg = defRefLastSegment(availDefRef)
-        if (seg) actionType = seg as ActionType
-      }
-    }
-  }
-
-  return { name, path, type: actionType, details }
-}
-
-function parseModeInitValue(container: any, path: string): ModeInitValue {
-  const name = getShortName(container)
-  const values: Record<string, string> = {}
-
-  // 复用 getAllParams 提取所有参数
-  const all = getAllParams(container)
-  for (const p of all) {
-    const defRef = getDefRef(p)
-    const value = p?.['VALUE']
-    if (defRef && value !== undefined) {
-      const key = defRefLastSegment(defRef)
-      if (key) values[key] = String(value)
-    }
-  }
-
-  return { name, path, values }
-}

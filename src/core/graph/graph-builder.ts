@@ -1,18 +1,48 @@
 // ============================================================
-// 图构建器 — 将 BswMModel 转换为 Vue Flow 节点和边
-// 数据流方向: RequestPort → Condition → Expression → Rule → ActionList → Action
+// 图构建器 — 通用范式
 //
-// 核心原则:
-//   - 同一个实体在图上只出现一次，被多次引用时通过多条边连接
-//   - 所有边使用深色醒目颜色
-//   - Rule → ActionList 分 True/False 两种颜色
+// 核心设计:
+//   - 节点: 从 BswMEntity 自动创建，层级由 ENTITY_LAYER_MAP 推导
+//   - 边: 递归遍历 entity.refs + subContainers.refs 提取所有引用
+//   - 特殊边: 由 SPECIAL_EDGES 配置（Rule True/False、ActionList → Action）
+//   - 详情: 从 params/subContainers 通用提取，无 switch 分支
 // ============================================================
 
 import type { Node, Edge } from '@vue-flow/core'
-import type { BswMModel } from '@/types/bswm'
+import type { BswMModel, BswMEntity } from '@/types/bswm'
 import type { NodeLayer } from '@/constants/layers'
 import type { BswMNodeData } from '@/types/graph'
+import { ENTITY_LAYER_MAP, SPECIAL_EDGES } from '@/constants/layers'
 import { EDGE_DEFAULT_STYLE, EDGE_TRUE_STYLE, EDGE_FALSE_STYLE } from '@/constants/graph-styles'
+
+/**
+ * 递归收集实体及其子容器中所有指向模型内部实体的引用
+ *
+ * ARXML 中引用可能出现在容器自身（如 Rule → Expression），
+ * 也可能嵌套在子容器中（如 ActionList → ActionListItem → Action）。
+ * 此函数递归遍历整棵子容器树，收集所有"内部引用"。
+ *
+ * @returns (refSuffix, targetPath) 对的列表
+ */
+function collectAllInternalRefs(entity: BswMEntity, entities: Map<string, BswMEntity>): Array<[string, string]> {
+  const results: Array<[string, string]> = []
+
+  function walk(e: BswMEntity) {
+    for (const [refSuffix, targets] of e.refs) {
+      for (const target of targets) {
+        if (entities.has(target)) {
+          results.push([refSuffix, target])
+        }
+      }
+    }
+    for (const sub of e.subContainers) {
+      walk(sub)
+    }
+  }
+
+  walk(entity)
+  return results
+}
 
 /**
  * 将 BswMModel 转换为 Vue Flow 节点和边
@@ -22,155 +52,53 @@ export function buildGraph(model: BswMModel): { nodes: Node<BswMNodeData>[], edg
   const edges: Edge[] = []
   const edgeIdSet = new Set<string>()
 
-  // ---- 1. RequestPort 节点 ----
-  for (const [path, port] of model.requestPorts) {
-    nodes.push({
-      id: path,
-      type: 'requestPort',
-      position: { x: 0, y: 0 },
-      data: {
-        label: port.name,
-        layer: 'requestPort' as NodeLayer,
-        path,
-        detail: port.source.type,
-      },
-    })
-  }
+  for (const [path, entity] of model.entities) {
+    const layer = ENTITY_LAYER_MAP[entity.type]
+    if (!layer) continue // 不在 DAG 层级中的实体不创建节点
 
-  // ---- 2. Condition 节点 + RequestPort → Condition 边 ----
-  for (const [path, cond] of model.conditions) {
+    // ---- 创建节点 ----
     nodes.push({
       id: path,
-      type: 'condition',
+      type: layer,
       position: { x: 0, y: 0 },
       data: {
-        label: cond.name,
-        layer: 'condition' as NodeLayer,
+        label: entity.name,
+        layer: layer as NodeLayer,
         path,
-        detail: `${cond.conditionType} ${cond.compareValue}`,
+        detail: getEntityDetail(entity),
       },
     })
 
-    if (cond.modeRequestPortRef && model.requestPorts.has(cond.modeRequestPortRef)) {
-      addEdge(edges, edgeIdSet, {
-        source: cond.modeRequestPortRef,
-        target: path,
-        style: EDGE_DEFAULT_STYLE,
-      })
-    }
-  }
+    // ---- 创建边: 遍历所有引用（包括子容器中的） ----
+    const specialEdgeDefs = SPECIAL_EDGES[entity.type]
 
-  // ---- 3. Expression 节点 + 参数 → Expression 边 ----
-  for (const [path, expr] of model.expressions) {
-    nodes.push({
-      id: path,
-      type: 'expression',
-      position: { x: 0, y: 0 },
-      data: {
-        label: expr.name,
-        layer: 'expression' as NodeLayer,
-        path,
-        detail: expr.operator,
-      },
-    })
+    const allRefs = collectAllInternalRefs(entity, model.entities)
 
-    for (const argRef of expr.arguments) {
-      if (model.conditions.has(argRef) || model.expressions.has(argRef)) {
+    for (const [refSuffix, target] of allRefs) {
+      const specialDef = specialEdgeDefs?.find(d => d.refSuffix === refSuffix)
+
+      if (specialDef) {
+        // 特殊边: source=当前实体 → target=引用目标（正向边）
+        const edgeStyle = specialDef.styleKey === 'true' ? EDGE_TRUE_STYLE
+          : specialDef.styleKey === 'false' ? EDGE_FALSE_STYLE
+          : EDGE_DEFAULT_STYLE
         addEdge(edges, edgeIdSet, {
-          source: argRef,
+          source: path,
+          target,
+          sourceHandle: specialDef.handle || undefined,
+          label: specialDef.label || undefined,
+          animated: specialDef.styleKey === 'true',
+          style: edgeStyle,
+        })
+      } else {
+        // 普通边: source=引用目标 → target=当前实体（数据流方向）
+        addEdge(edges, edgeIdSet, {
+          source: target,
           target: path,
           style: EDGE_DEFAULT_STYLE,
         })
       }
     }
-  }
-
-  // ---- 4. Rule 节点 + Expression → Rule 边 + Rule → ActionList 边 ----
-  for (const [path, rule] of model.rules) {
-    nodes.push({
-      id: path,
-      type: 'rule',
-      position: { x: 0, y: 0 },
-      data: {
-        label: rule.name,
-        layer: 'rule' as NodeLayer,
-        path,
-        detail: rule.initState,
-      },
-    })
-
-    // Expression → Rule
-    if (rule.expressionRef && model.expressions.has(rule.expressionRef)) {
-      addEdge(edges, edgeIdSet, {
-        source: rule.expressionRef,
-        target: path,
-        style: EDGE_DEFAULT_STYLE,
-      })
-    }
-
-    // Rule → TrueActionList
-    if (rule.trueActionListRef && model.actionLists.has(rule.trueActionListRef)) {
-      addEdge(edges, edgeIdSet, {
-        source: path,
-        target: rule.trueActionListRef,
-        sourceHandle: 'true',
-        label: 'T',
-        animated: true,
-        style: EDGE_TRUE_STYLE,
-      })
-    }
-
-    // Rule → FalseActionList
-    if (rule.falseActionListRef && model.actionLists.has(rule.falseActionListRef)) {
-      addEdge(edges, edgeIdSet, {
-        source: path,
-        target: rule.falseActionListRef,
-        sourceHandle: 'false',
-        label: 'F',
-        animated: false,
-        style: EDGE_FALSE_STYLE,
-      })
-    }
-  }
-
-  // ---- 5. ActionList 节点 + ActionList → Action 边 ----
-  for (const [path, al] of model.actionLists) {
-    nodes.push({
-      id: path,
-      type: 'actionList',
-      position: { x: 0, y: 0 },
-      data: {
-        label: al.name,
-        layer: 'actionList' as NodeLayer,
-        path,
-        detail: al.execution,
-      },
-    })
-
-    for (const item of al.items) {
-      if (model.actions.has(item.actionRef) || model.actionLists.has(item.actionRef)) {
-        addEdge(edges, edgeIdSet, {
-          source: path,
-          target: item.actionRef,
-          style: EDGE_DEFAULT_STYLE,
-        })
-      }
-    }
-  }
-
-  // ---- 6. Action 节点 ----
-  for (const [path, action] of model.actions) {
-    nodes.push({
-      id: path,
-      type: 'action',
-      position: { x: 0, y: 0 },
-      data: {
-        label: action.name,
-        layer: 'action' as NodeLayer,
-        path,
-        detail: getActionDetailStr(action),
-      },
-    })
   }
 
   return { nodes, edges }
@@ -199,24 +127,112 @@ function addEdge(
   })
 }
 
-/** 生成 Action 的简短描述 */
-function getActionDetailStr(action: { type: string; details: Record<string, any> }): string {
-  switch (action.type) {
-    case 'EcuMDriverInitList': return 'EcuM InitList'
-    case 'EcuMGoDown': return 'EcuM GoDown'
-    case 'EcuMSelectShutdownTarget': return `Shutdown → ${String(action.details.shutdownTarget ?? '').replace('BSWM_ECUM_SHUTDOWN_TARGET_', '')}`
-    case 'EcuMStateSwitch': return `State → ${String(action.details.ecuMState ?? '').replace('BSWM_ECUM_STATE_', '')}`
-    case 'ComMAllowCom': return action.details.comAllowed ? 'ComM Allow' : 'ComM DisAllow'
-    case 'ComMModeSwitch': return `ComM → ${String(action.details.requestedMode ?? '').replace('COMM_', '')}`
-    case 'PduGroupSwitch': return action.details.reinit ? 'PduGroup Reinit' : 'PduGroup Switch'
-    case 'PduRouterControl': return `PduR ${String(action.details.pduRouterAction ?? '').replace('BSWM_PDUR_', '')}`
-    case 'DeadlineMonitoringControl': return 'DM Control'
-    case 'NMControl': return action.details.nmAction === 'BSWM_NM_ENABLE' ? 'NM Enable' : 'NM Disable'
-    case 'UserCallout': return `Callout: ${action.details.calloutFunction ?? ''}`
-    case 'RteSwitch': return 'Rte Switch'
-    case 'SchMModeSwitch': return 'SchM Switch'
-    case 'NvMBlockJobControl': return `NvM ${action.details.nvmBlockControl ?? ''}`
-    case 'Unknown': return 'Unknown Action'
-    default: return action.type
+/**
+ * 生成实体的简短描述（节点第二行文字）
+ *
+ * 按实体类型提取最有辨识度的参数作为描述
+ */
+function getEntityDetail(entity: BswMEntity): string {
+  switch (entity.type) {
+    case 'BswMModeRequestPort':
+    case 'BswMEventRequestPort': {
+      return getSourceType(entity)
+    }
+    case 'BswMModeCondition': {
+      const condType = entity.params.get('BswMConditionType')?.replace('BSWM_', '') ?? 'EQUALS'
+      const value = getConditionValue(entity)
+      return value ? `${condType} ${value}` : condType
+    }
+    case 'BswMLogicalExpression': {
+      return entity.params.get('BswMLogicalOperator')?.replace('BSWM_', '') ?? 'AND'
+    }
+    case 'BswMRule': {
+      return entity.params.get('BswMRuleInitState')?.replace('BSWM_', '') ?? 'UNDEFINED'
+    }
+    case 'BswMActionList': {
+      return entity.params.get('BswMActionListExecution')?.replace('BSWM_', '') ?? 'TRIGGER'
+    }
+    case 'BswMAction': {
+      return getActionDetail(entity)
+    }
+    default:
+      return ''
   }
+}
+
+/** 从 RequestPort 的子容器中推导来源类型 */
+function getSourceType(entity: BswMEntity): string {
+  for (const sourceContainer of entity.subContainers) {
+    if (!sourceContainer.type.endsWith('Source')) continue
+    for (const srcType of sourceContainer.subContainers) {
+      if (srcType.type) {
+        return srcType.type.replace(/^BswM/, '')
+      }
+    }
+  }
+  return ''
+}
+
+/** 从 Condition 的子容器中提取比较值 */
+function getConditionValue(entity: BswMEntity): string {
+  for (const valueContainer of entity.subContainers) {
+    if (valueContainer.type !== 'BswMConditionValue') continue
+    for (const modeSub of valueContainer.subContainers) {
+      if (modeSub.type === 'BswMBswMode') {
+        return modeSub.params.get('BswModeCompareValue')
+          ?? modeSub.params.get('BswMBswRequestedMode')
+          ?? ''
+      }
+      if (modeSub.type === 'BswMApplicationMode') {
+        return modeSub.params.get('BswMApplicationValue') ?? ''
+      }
+    }
+  }
+  return ''
+}
+
+/** 从 Action 的子容器中提取动作描述 */
+function getActionDetail(entity: BswMEntity): string {
+  for (const availContainer of entity.subContainers) {
+    if (availContainer.type !== 'BswMAvailableActions') continue
+    for (const actionSub of availContainer.subContainers) {
+      const actionTypeName = actionSub.type.replace(/^BswM/, '')
+      const detail = getActionSubDetail(actionSub)
+      return detail ? `${actionTypeName}: ${detail}` : actionTypeName
+    }
+  }
+  return entity.type
+}
+
+/** 从 Action 子类型容器中提取关键参数值 */
+function getActionSubDetail(sub: BswMEntity): string {
+  const candidates = [
+    'BswMEcuMShutdownTarget',
+    'BswMEcuMState',
+    'BswMComMRequestedMode',
+    'BswMNMAction',
+    'BswMNvMBlockControl',
+    'BswMPduRouterAction',
+    'BswMUserCalloutFunction',
+    'BswMComAllowed',
+  ]
+  for (const key of candidates) {
+    const val = sub.params.get(key)
+    if (val !== undefined) {
+      return val
+        .replace(/^BSWM_ECUM_SHUTDOWN_TARGET_/, '')
+        .replace(/^BSWM_ECUM_STATE_/, '')
+        .replace(/^BSWM_NM_/, '')
+        .replace(/^BSWM_PDUR_/, '')
+        .replace(/^BSWM_/, '')
+        .replace(/^COMM_/, '')
+    }
+  }
+  // 回退: 显示第一个非 index/abortOnFail 参数值
+  for (const [key, val] of sub.params) {
+    if (key !== 'BswMActionListItemIndex' && key !== 'BswMAbortOnFail') {
+      return val.replace(/^BSWM_/, '')
+    }
+  }
+  return ''
 }

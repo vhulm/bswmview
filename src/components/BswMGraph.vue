@@ -27,6 +27,8 @@ const { fitView, onNodeClick } = useVueFlow()
 const sidebarCollapsed = ref(false)
 // 侧边栏宽度（可拖拽调整）
 const sidebarWidth = ref(256)
+// 右侧详情面板宽度（可拖拽调整）
+const detailWidth = ref(288)
 
 // markRaw 防止组件被 Vue 响应式系统代理，避免性能警告
 const nodeTypes: Record<string, Component> = {
@@ -149,6 +151,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <DetailPanel />
+    <DetailPanel v-model:width="detailWidth" />
   </div>
 </template>

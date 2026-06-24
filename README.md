@@ -7,19 +7,19 @@
 ![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss)
 
-<!-- 构建状态 badge — 请将 {owner}/{repo} 替换为实际 GitHub 仓库路径 -->
-<!-- ![Build](https://github.com/{owner}/{repo}/actions/workflows/build.yml/badge.svg) -->
-
 ## 功能特性
 
-- **ARXML 解析** — 支持 AUTOSAR BswM 标准配置格式，自动识别 ECU 前缀，兼容 BswMPartition 容器结构
+- **ARXML 解析** — 支持 AUTOSAR BswM 标准配置格式（EcuC），自动识别 ECU 前缀，兼容 BswMPartition 容器结构
+- **通用范式解析** — 所有 EcuC 容器统一为 `BswMEntity`，自动提取参数和引用，零信息丢失，新增实体类型无需修改解析器
 - **6 层 DAG 可视化** — 请求端口 → 模式条件 → 逻辑表达式 → 仲裁规则 → 动作列表 → 动作，从左到右自动布局
 - **智能图布局** — 基于 ELK.js 分层算法，分区约束保证层级清晰，正交边路由避免线缆交错
 - **规则高亮** — 点击侧栏规则，自动高亮其关联的完整链路并聚焦视图
+- **未使用节点检测** — 自动识别不属于任何完整链路（RequestPort→Action）的节点并标记
 - **图层过滤** — 可独立开关每一层节点的显示/隐藏
-- **搜索过滤** — 按名称实时搜索实体
-- **详情面板** — 点击节点查看完整配置属性
-- **多格式兼容** — 已验证支持 S32K312/S32K148/RK2118M2 等不同 ECU 的配置文件
+- **搜索过滤** — 按名称实时搜索实体，智能排序（完全匹配 > 前缀匹配 > 包含匹配）
+- **详情面板** — 点击节点查看完整配置属性，递归展示参数、引用、子容器
+- **可拖拽面板** — 侧栏和详情面板宽度可拖拽调整
+- **Tauri 桌面打包** — 可打包为 Windows 原生应用，提供原生文件选择对话框
 
 ## 技术栈
 
@@ -32,6 +32,7 @@
 | ARXML 解析 | fast-xml-parser | 高性能 XML 解析 |
 | 状态管理 | Pinia | Vue 3 官方推荐状态库 |
 | 样式 | Tailwind CSS 4 | 原子化 CSS（通过 @tailwindcss/vite 插件集成） |
+| 桌面打包 | Tauri 2 | 提供 Windows 原生文件对话框 + exe 打包 |
 
 ## 开发环境搭建
 
@@ -39,6 +40,7 @@
 
 - **Node.js** ≥ 20.0.0（推荐 22.x LTS）
 - **npm** ≥ 10.0.0（随 Node.js 安装）
+- **Rust** ≥ 1.77（仅 Tauri 桌面打包需要）
 
 ### 搭建步骤
 
@@ -71,29 +73,31 @@ bswmview/
 ├── src/
 │   ├── main.ts              # 应用入口
 │   ├── App.vue              # 根组件
-│   ├── core/                # 纯业务逻辑（零 Vue 依赖）
+│   ├── core/                # 核心业务逻辑
 │   │   ├── index.ts         # 桶导出
 │   │   ├── parser/
-│   │   │   └── arxml-parser.ts  # ARXML 解析器
+│   │   │   └── arxml-parser.ts  # ARXML 解析器（通用范式，零 Vue 依赖）
 │   │   └── graph/
-│   │       ├── graph-builder.ts # 数据模型 → Vue Flow 节点/边
-│   │       ├── chain-tracer.ts  # 链路追踪与未使用节点检测
-│   │       └── layout.ts        # ELK.js 自动布局
+│   │       ├── graph-builder.ts # 数据模型 → Vue Flow 节点/边（声明式配置驱动）
+│   │       ├── chain-tracer.ts  # 链路追踪与未使用节点检测（零 Vue 依赖）
+│   │       └── layout.ts        # ELK.js 自动布局（与 Vue Flow 功能性耦合）
 │   ├── types/
-│   │   ├── bswm.ts          # BswM 领域类型定义
+│   │   ├── bswm.ts          # BswM 领域类型定义（通用 BswMEntity 模型）
 │   │   └── graph.ts         # 图桥接类型（BswMNodeData, AdjacencyLists）
 │   ├── constants/
-│   │   ├── layers.ts        # 图层分区、颜色、标签
+│   │   ├── layers.ts        # 图层分区、颜色、标签、实体映射、特殊边配置
 │   │   └── graph-styles.ts  # 边颜色样式、节点尺寸
 │   ├── composables/
+│   │   ├── useGraphFilter.ts # 图层过滤 + 链路高亮 composable
 │   │   └── usePlatform.ts   # Tauri 平台检测组合式函数
 │   ├── utils/
-│   │   └── platform.ts      # 平台工具（Tauri 检测、文件操作）
+│   │   └── platform.ts      # 平台工具（Tauri 检测、原生文件对话框封装）
 │   ├── components/
 │   │   ├── BswMGraph.vue    # 主图组件（侧栏+画布+详情）
-│   │   ├── Sidebar.vue      # 侧栏（文件加载/规则列表）
-│   │   ├── DetailPanel.vue  # 节点详情面板
-│   │   ├── Toolbar.vue      # 工具栏（缩放/布局/搜索）
+│   │   ├── Sidebar.vue      # 侧栏（文件加载/图层过滤/实体列表导航）
+│   │   ├── DetailPanel.vue  # 节点详情面板（递归展示实体结构）
+│   │   ├── EntityDetailRender.ts # 递归实体详情渲染（render 函数实现）
+│   │   ├── Toolbar.vue      # 工具栏（缩放/布局/搜索/高亮清除）
 │   │   └── nodes/           # 6 种自定义节点组件
 │   │       ├── BaseNodeProps.ts  # 共享 props 类型
 │   │       ├── RequestPortNode.vue
@@ -105,10 +109,10 @@ bswmview/
 │   ├── stores/
 │   │   └── bswm-store.ts    # Pinia 状态管理
 │   └── styles/
-│       └── global.css       # 全局样式
-├── tauri/                   # Tauri 桌面打包（仅 Windows exe）
+│       └── global.css       # 全局样式（含节点 CSS 样式）
+├── tauri/                   # Tauri 桌面打包
 │   ├── src/
-│   │   ├── commands.rs      # 原生文件对话框（Vue 无法原生实现）
+│   │   ├── commands.rs      # 原生文件对话框 + 文件重读命令
 │   │   ├── lib.rs           # App Builder 配置
 │   │   └── main.rs          # 入口
 │   └── tauri.conf.json      # Tauri 配置
@@ -124,29 +128,31 @@ bswmview/
 ### 常用命令
 
 ```bash
-npm run dev       # 启动开发服务器（热更新）
-npm run build     # 类型检查 + 生产构建
-npm run preview   # 预览生产构建
+npm run dev         # 启动开发服务器（热更新）
+npm run build:web   # Web 版本构建（类型检查 + Vite 构建）
+npm run build       # Tauri 桌面应用构建
+npm run preview     # 预览 Web 构建结果
 ```
 
-### 添加新的 Action 类型
+### 添加新的实体类型
 
-当需要支持新的 BswM Action 类型时（如从新 ARXML 中发现的类型），需修改三个文件：
+通用范式设计下，大多数新实体类型**无需修改解析器**——`parseContainer()` 自动提取所有参数和引用。
 
-1. **`src/types/bswm.ts`** — 在 `ActionType` 联合类型中添加新类型
-2. **`src/core/parser/arxml-parser.ts`** — 在 `parseAction` 的 if-else 链中添加新分支，提取该 Action 的参数和引用
-3. **`src/core/graph/graph-builder.ts`** — 在 `getActionDetailStr` 的 switch 中添加显示逻辑
+只需修改声明式配置：
 
-未识别的 Action 类型会自动走 fallback：保留 `DEFINITION-REF` 最后一段作为类型名，参数不丢失。
-
-### 添加新的请求端口来源类型
-
-1. **`src/types/bswm.ts`** — 在 `RequestSourceType` 中添加新类型
-2. **`src/core/parser/arxml-parser.ts`** — 在 `parseRequestPort` 的 if-else 链中添加新分支
+1. **`src/constants/layers.ts`** — 在 `ENTITY_LAYER_MAP` 中添加新实体的类型→层级映射
+2. 如果需要在 DAG 图中显示为新层级，还需更新 `NodeLayer`、`LAYER_PARTITION`、`LAYER_COLORS`、`LAYER_LABEL`
+3. 如果有特殊边语义，在 `SPECIAL_EDGES` 中配置
+4. **`src/components/nodes/`** — 新建对应节点组件（如果是新层级）
+5. **`src/components/BswMGraph.vue`** — 在 `nodeTypes` 中注册新组件
 
 ### 修改节点样式
 
-每种节点的颜色在 `src/constants/layers.ts` 的 `LAYER_COLORS` 中定义。节点组件在 `src/components/nodes/` 目录下，每个组件独立控制自身布局和样式。
+节点颜色由两处定义：
+- **CSS 样式** 在 `src/styles/global.css` 中定义（如 `.bswm-node-request`）
+- **常量颜色** 在 `src/constants/layers.ts` 的 `LAYER_COLORS` 中定义（用于侧栏和详情面板）
+
+节点组件在 `src/components/nodes/` 目录下，每个组件独立控制自身布局和样式。
 
 ### 修改图布局参数
 
@@ -165,7 +171,7 @@ npm update
 npm install <包名>@latest
 
 # 更新后验证
-npm run build
+npm run build:web
 ```
 
 **注意**：
@@ -174,13 +180,22 @@ npm run build
 
 ## 构建与部署
 
+### Web 版本
+
 ```bash
 # 生产构建
-npm run build
+npm run build:web
 
 # 构建产物在 dist/ 目录，可直接部署到静态文件服务器
 # 本地预览构建结果
 npm run preview
+```
+
+### Tauri 桌面版本
+
+```bash
+# 构建桌面应用（需要 Rust 工具链）
+npm run build
 ```
 
 ## ARXML 格式说明
@@ -189,12 +204,12 @@ npm run preview
 
 已验证支持的配置元素：
 
-| 实体类型 | 枚举值 / 子类型 |
-|---------|---------------|
-| 请求端口来源 | EcuMIndication, EcuMRUNRequestIndication, EcuMWakeupSource, CanSMIndication, ComMIndication, ComMPncRequest, DcmComModeRequest, GenericRequest, Timer |
-| 条件类型 | EQUALS, NOT_EQUALS |
-| 逻辑操作符 | AND, OR, XOR, NAND, NOR, NXOR, NOT |
-| 规则初始状态 | UNDEFINED, TRUE, FALSE |
-| ActionList 执行模式 | TRIGGER, CONDITIONAL |
-| 请求处理方式 | IMMEDIATE, DEFERRED |
-| 动作类型 | EcuMDriverInitList, EcuMGoDown, EcuMSelectShutdownTarget, EcuMStateSwitch, ComMAllowCom, ComMModeSwitch, PduGroupSwitch, PduRouterControl, DeadlineMonitoringControl, NMControl, UserCallout, RteSwitch, SchMModeSwitch, NvMBlockJobControl |
+| 实体类型 | 说明 |
+|---------|------|
+| BswMModeRequestPort | 模式请求端口（含 9 种来源类型） |
+| BswMEventRequestPort | 事件请求端口 |
+| BswMModeCondition | 模式条件（EQUALS / NOT_EQUALS） |
+| BswMLogicalExpression | 逻辑表达式（AND / OR / XOR / NAND / NOR / NXOR / NOT） |
+| BswMRule | 仲裁规则（初始状态: UNDEFINED / TRUE / FALSE） |
+| BswMActionList | 动作列表（执行模式: TRIGGER / CONDITIONAL） |
+| BswMAction | 动作（14+ 种子类型，未知类型自动 fallback） |

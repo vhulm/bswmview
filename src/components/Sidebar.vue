@@ -2,7 +2,7 @@
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { useBswMStore } from '@/stores/bswm-store'
 import type { NodeLayer } from '@/constants/layers'
-import { LAYER_LABEL, LAYER_COLORS } from '@/constants/layers'
+import { LAYER_LABEL, LAYER_COLORS, ENTITY_LAYER_MAP } from '@/constants/layers'
 import { usePlatform } from '@/composables/usePlatform'
 
 const props = withDefaults(defineProps<{
@@ -88,14 +88,15 @@ const entityLists = computed(() => {
   const m = store.model
   if (!m) return {} as Record<string, EntityItem[]>
 
-  return {
-    requestPort: Array.from(m.requestPorts.values()).map(e => ({ name: e.name, path: e.path })),
-    condition: Array.from(m.conditions.values()).map(e => ({ name: e.name, path: e.path })),
-    expression: Array.from(m.expressions.values()).map(e => ({ name: e.name, path: e.path })),
-    rule: Array.from(m.rules.values()).map(e => ({ name: e.name, path: e.path })),
-    actionList: Array.from(m.actionLists.values()).map(e => ({ name: e.name, path: e.path })),
-    action: Array.from(m.actions.values()).map(e => ({ name: e.name, path: e.path })),
+  // 按 ENTITY_LAYER_MAP 分组
+  const groups: Record<string, EntityItem[]> = {}
+  for (const entity of m.entities.values()) {
+    const layer = ENTITY_LAYER_MAP[entity.type]
+    if (!layer) continue // 不在 DAG 中的实体不在侧栏显示
+    if (!groups[layer]) groups[layer] = []
+    groups[layer].push({ name: entity.name, path: entity.path })
   }
+  return groups
 })
 
 // 列表配置：顺序、图标
@@ -306,12 +307,12 @@ function onEntityClick(path: string) {
     <!-- 统计信息 -->
     <div v-if="store.model" class="p-3 border-t border-gray-100 text-xs text-gray-500 shrink-0">
       <div class="grid grid-cols-2 gap-x-3 gap-y-0.5">
-        <span>RequestPorts: {{ store.model.requestPorts.size }}</span>
-        <span>Conditions: {{ store.model.conditions.size }}</span>
-        <span>Expressions: {{ store.model.expressions.size }}</span>
-        <span>Rules: {{ store.model.rules.size }}</span>
-        <span>ActionLists: {{ store.model.actionLists.size }}</span>
-        <span>Actions: {{ store.model.actions.size }}</span>
+        <span>RequestPorts: {{ entityLists.requestPort?.length ?? 0 }}</span>
+        <span>Conditions: {{ entityLists.condition?.length ?? 0 }}</span>
+        <span>Expressions: {{ entityLists.expression?.length ?? 0 }}</span>
+        <span>Rules: {{ entityLists.rule?.length ?? 0 }}</span>
+        <span>ActionLists: {{ entityLists.actionList?.length ?? 0 }}</span>
+        <span>Actions: {{ entityLists.action?.length ?? 0 }}</span>
       </div>
     </div>
     </div>
